@@ -1,0 +1,36 @@
+# Builds the Windows .exe on GitHub's servers - no local Python needed.
+# Push this folder to a GitHub repo, then: Actions tab -> "Build Windows exe"
+# -> Run workflow. Download the result from the run's "Artifacts" section.
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Include Demucs (approx. 2 GB folder instead of a 120 MB exe)"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        shell: cmd
+        run: build_windows.bat ${{ inputs.full && 'full' || '' }}
+      - name: Smoke test
+        shell: cmd
+        run: |
+          if exist dist\drumkit-cli.exe (dist\drumkit-cli.exe --help) else (dist\DrumkitExtractor-full\drumkit-cli.exe --help)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DrumkitExtractor-windows${{ inputs.full && '-full' || '' }}
+          path: |
+            dist/*.exe
+            dist/DrumkitExtractor-full/
