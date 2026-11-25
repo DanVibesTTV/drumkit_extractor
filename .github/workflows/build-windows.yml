@@ -19,10 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        id: py
         with:
           python-version: "3.12"
       - name: Build
         shell: cmd
+        env:
+          # Use exactly this Python - the runner also has newer versions installed
+          PYTHON_EXE: ${{ steps.py.outputs.python-path }}
         run: build_windows.bat ${{ inputs.full && 'full' || '' }}
       - name: Smoke test
         shell: cmd
