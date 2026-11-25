@@ -26,6 +26,7 @@ jobs:
         variant: ${{ fromJSON(github.event_name == 'push' && '["lite","full"]' || (inputs.full && '["full"]' || '["lite"]')) }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         id: py
         with:
@@ -38,6 +39,32 @@ jobs:
           PYTHON_EXE: ${{ steps.py.outputs.python-path }}
         run: build_windows.bat ${{ matrix.variant == 'full' && 'full' || '' }}
 
+      # Read the version from the exact FFmpeg binary included in the build.
+      - name: Detect FFmpeg version
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'lite'
+        shell: pwsh
+        run: |
+          $output = & .\vendor\ffmpeg.exe -version 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to run the bundled FFmpeg binary"
+          }
+
+          $versionLine = ($output | Select-String '^ffmpeg version ').Line
+          $match = [regex]::Match($versionLine, '^ffmpeg version\s+(?<version>\d+\.\d+(?:\.\d+)?)')
+          if (-not $match.Success) {
+            throw "Could not parse the FFmpeg version from: $versionLine"
+          }
+
+          $match.Groups['version'].Value |
+            Out-File -FilePath ffmpeg-version.txt -Encoding ascii -NoNewline
+
+      - name: Upload FFmpeg version metadata
+        if: startsWith(github.ref, 'refs/tags/') && matrix.variant == 'lite'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: ffmpeg-version.txt
+
       - name: Smoke test
         shell: cmd
         run: |
@@ -48,7 +75,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           if ("${{ matrix.variant }}" -eq "lite") {
-            Copy-Item dist\DrumkitExtractor.exe, dist\drumkit-cli.exe release\
+            Copy-Item dist\DrumkitExtractor.exe, dist\drumkit-cli.exe, vendor\ffmpeg-LICENSE.txt release\
           } else {
             # Folder build -> one zip. GitHub allows max 2 GiB per release file,
             # so split into parts only if the zip is too big.
@@ -72,20 +99,77 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # needed to create the release
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - name: Download FFmpeg version metadata
+        uses: actions/download-artifact@v4
         with:
+          name: release-metadata
+          path: metadata
+
+      - name: Download build files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: DrumkitExtractor-*
           path: release
           merge-multiple: true
+
+      - name: Download matching FFmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FFMPEG_VERSION="$(tr -d '\r\n' < metadata/ffmpeg-version.txt)"
+          if [[ -z "$FFMPEG_VERSION" ]]; then
+            echo "FFmpeg version metadata is missing" >&2
+            exit 1
+          fi
+
+          FFMPEG_SOURCE_FILE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://ffmpeg.org/releases/${FFMPEG_SOURCE_FILE}" \
+            --output "release/${FFMPEG_SOURCE_FILE}"
+
+      - name: Build release notes
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${RELEASE_VERSION#v}"
+          FFMPEG_VERSION="$(tr -d '\r\n' < metadata/ffmpeg-version.txt)"
+          FFMPEG_SOURCE_FILE="ffmpeg-${FFMPEG_VERSION}.tar.xz"
+
+          VERSION="$VERSION" \
+          FFMPEG_VERSION="$FFMPEG_VERSION" \
+          FFMPEG_SOURCE_FILE="$FFMPEG_SOURCE_FILE" \
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          notes = Path("RELEASE_NOTES.md").read_text(encoding="utf-8")
+          replacements = {
+              "{{VERSION}}": os.environ["VERSION"],
+              "{{FFMPEG_VERSION}}": os.environ["FFMPEG_VERSION"],
+              "{{FFMPEG_SOURCE_FILE}}": os.environ["FFMPEG_SOURCE_FILE"],
+          }
+
+          for placeholder, value in replacements.items():
+              notes = notes.replace(placeholder, value)
+
+          remaining = [placeholder for placeholder in replacements if placeholder in notes]
+          if remaining:
+              raise SystemExit(f"Unfilled release-note placeholders: {remaining}")
+
+          Path("release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*
-          generate_release_notes: true
-          body: |
-            ## Downloads
-            - **DrumkitExtractor.exe**: double-click app, no install needed (recommended)
-            - **drumkit-cli.exe**: command-line version
-            - **DrumkitExtractor-full-win64**: includes Demucs AI drum separation for the best results on full songs (large download). Unzip it and run `DrumkitExtractor.exe` inside the folder.
-
-            Windows may show a SmartScreen warning because the app isn't code-signed: click *More info → Run anyway*.
+          generate_release_notes: false
+          name: Drumkit Extractor ${{ github.ref_name }}
+          body_path: release-notes.md
