@@ -18,6 +18,9 @@ ffmpeg = HERE / "vendor" / "ffmpeg.exe"
 if not ffmpeg.is_file():
     raise SystemExit("vendor/ffmpeg.exe missing - run build_windows.bat, it downloads it.")
 binaries.append((str(ffmpeg), "."))
+lic = HERE / "vendor" / "ffmpeg-LICENSE.txt"
+if lic.is_file():
+    datas.append((str(lic), "licenses"))
 
 excludes = ["torch", "torchaudio", "demucs"] if not FULL else []
 if FULL:

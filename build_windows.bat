@@ -64,7 +64,13 @@ if not exist vendor\ffmpeg.exe (
     "Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile 'vendor\ffmpeg.zip';" ^
     "Expand-Archive 'vendor\ffmpeg.zip' 'vendor\ffmpeg_tmp' -Force;" ^
     "Copy-Item (Get-ChildItem 'vendor\ffmpeg_tmp' -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName 'vendor\ffmpeg.exe';" ^
+    "$lic = Get-ChildItem 'vendor\ffmpeg_tmp' -Recurse -Include LICENSE,LICENSE.txt | Select-Object -First 1;" ^
+    "if ($lic) { Copy-Item $lic.FullName 'vendor\ffmpeg-LICENSE.txt' };" ^
     "Remove-Item 'vendor\ffmpeg.zip','vendor\ffmpeg_tmp' -Recurse -Force" || exit /b 1
+)
+REM  ffmpeg's licence (GPLv3) must ship with it - fetch the text if the zip had none
+if not exist vendor\ffmpeg-LICENSE.txt (
+  powershell -NoProfile -Command "Invoke-WebRequest 'https://www.gnu.org/licenses/gpl-3.0.txt' -OutFile 'vendor\ffmpeg-LICENSE.txt'" || exit /b 1
 )
 
 REM ---- Demucs model weights (full build) --------------------------------
